@@ -73,9 +73,9 @@ export const PersonaCard: React.FC<PersonaCardProps> = ({ persona, onDownloadPDF
         </div>
         
         <SectionTitle icon={<PhotoIcon className="w-5 h-5" />} title="Storyboard Wizualny" />
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+        <div className="grid grid-cols-1 gap-3 mb-6">
           {persona.storyboardImages.map((imgSrc, i) => (
-            <img key={`storyboard-${i}`} src={imgSrc} alt={`Storyboard ${i+1} dla ${persona.name}`} className="rounded-lg shadow-md aspect-square object-cover" />
+            <img key={`storyboard-${i}`} src={imgSrc} alt={`Storyboard ${i+1} dla ${persona.name}`} className="rounded-lg shadow-md aspect-video object-cover w-full" />
           ))}
         </div>
 
@@ -106,4 +106,3 @@ export const PersonaCard: React.FC<PersonaCardProps> = ({ persona, onDownloadPDF
     </div>
   );
 };
-    

@@ -1,5 +1,6 @@
 {
   "name": "Personaria",
   "description": "Zaawansowany generator person marketingowych wspierany przez Gemini AI, pomagający zrozumieć odbiorców i tworzyć ukierunkowane kampanie.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "prompt": ""
 }

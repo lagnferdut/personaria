@@ -1,7 +1,7 @@
 
-import { GoogleGenAI, GenerateContentResponse, GenerateImagesResponse } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, GenerateImagesResponse, Type } from "@google/genai";
 import { GEMINI_TEXT_MODEL, GEMINI_IMAGE_MODEL } from '../constants';
-import { ProcessedFile, PersonaScaffold, GoogleAd, SimpleGenerateContentResponse } from '../types';
+import { ProcessedFile, PersonaScaffold, GoogleAd } from '../types';
 
 if (!process.env.API_KEY) {
   // This will be caught by the App component if API_KEY is not set.
@@ -9,16 +9,16 @@ if (!process.env.API_KEY) {
   console.warn("Klucz API Gemini nie jest skonfigurowany. Ustaw zmienną środowiskową API_KEY.");
 }
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "YOUR_API_KEY_PLACEHOLDER" });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
 
 const cleanJsonString = (jsonStr: string): string => {
   let cleaned = jsonStr.trim();
   // Remove markdown fences (```json ... ``` or ``` ... ```)
-  const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
-  const match = cleaned.match(fenceRegex);
-  if (match && match[2]) {
-    cleaned = match[2].trim();
+  if (cleaned.startsWith("```json") && cleaned.endsWith("```")) {
+    cleaned = cleaned.substring(7, cleaned.length - 3).trim();
+  } else if (cleaned.startsWith("```") && cleaned.endsWith("```")) {
+     cleaned = cleaned.substring(3, cleaned.length - 3).trim();
   }
   return cleaned;
 };
@@ -30,7 +30,11 @@ const parsePersonasFromResponse = (responseText: string): PersonaScaffold[] => {
     // Gemini might return a single object or an array. Standardize to array.
     const rawPersonas = Array.isArray(parsed) ? parsed : (parsed.personas || [parsed]);
 
-    return rawPersonas.map((p: any, index: number) => ({
+    if (!Array.isArray(rawPersonas)) {
+      throw new Error("Oczekiwano tablicy person, ale otrzymano inny typ.");
+    }
+
+    return rawPersonas.map((p: any, index: number): PersonaScaffold => ({
       id: p.id || `persona-${Date.now()}-${index}`,
       name: p.name || "Nieznana Persona",
       age: typeof p.age === 'number' ? p.age : 0,
@@ -72,7 +76,7 @@ export const generateInitialPersonaData = async (
   marketingGoals: string,
   files: ProcessedFile[]
 ): Promise<PersonaScaffold[]> => {
-  if (!process.env.API_KEY || process.env.API_KEY === "YOUR_API_KEY_PLACEHOLDER") {
+  if (!process.env.API_KEY) {
     throw new Error("Klucz API Gemini (API_KEY) nie jest ustawiony w zmiennych środowiskowych.");
   }
 
@@ -81,18 +85,16 @@ export const generateInitialPersonaData = async (
     fileContext = "\n\nDodatkowe informacje z załączonych plików:\n";
     files.forEach(file => {
       fileContext += `- Nazwa pliku: ${file.name} (Typ: ${file.type}, Rozmiar: ${(file.size / 1024).toFixed(2)} KB)\n`;
-      if (file.content && (file.type === 'text/plain' || file.type === 'text/markdown')) {
+      if (file.content) {
         fileContext += `  Treść (fragment): ${file.content.substring(0, 200)}...\n`;
-      } else if (file.content) { // Could be base64 data for other types if handled, or just name/type
-         fileContext += `  Plik "${file.name}" został załączony. Przeanalizuj go w kontekście firmy.\n`;
       } else {
-        fileContext += `  Plik "${file.name}" został załączony (brak bezpośredniej treści tekstowej do wyświetlenia).\n`;
+        fileContext += `  Plik "${file.name}" został załączony (brak bezpośredniej treści tekstowej do przetworzenia po stronie klienta).\n`;
       }
     });
   }
 
   const prompt = `
-Jesteś zaawansowanym ekspertem od marketingu i strategii UX. Twoim zadaniem jest stworzenie 2-3 szczegółowych person marketingowych dla firmy na podstawie poniższych informacji.
+Jesteś zaawansowanym ekspertem od marketingu i strategii UX. Twoim zadaniem jest stworzenie 1-2 szczegółowych person marketingowych dla firmy na podstawie poniższych informacji.
 Dla każdej persony wygeneruj także przykładowe teksty reklam Google Ads, tekst reklamy na media społecznościowe oraz konkretne PROMPTY (polecenia) do wygenerowania obrazów przez model AI (np. Imagen).
 
 Informacje o firmie:
@@ -102,53 +104,49 @@ Informacje o firmie:
 - Cele marketingowe: ${marketingGoals}
 ${fileContext}
 
-Struktura odpowiedzi MUSI być w formacie JSON. Wygeneruj tablicę obiektów JSON, gdzie każdy obiekt reprezentuje jedną personę.
-Każdy obiekt persony powinien zawierać następujące pola:
-- id: unikalny identyfikator tekstowy (np. "persona-123")
-- name: imię persony (np. "Anna Innowatorka")
-- age: wiek (liczba)
-- occupation: zawód/stanowisko
-- demographics: opis demograficzny (lokalizacja, dochody, edukacja, rodzina itp.)
-- goals: tablica stringów z celami persony (min. 2)
-- challenges: tablica stringów z wyzwaniami/problemami persony (min. 2)
-- motivations: tablica stringów z motywacjami persony (min. 2)
-- communicationChannels: tablica stringów z preferowanymi kanałami komunikacji (np. "LinkedIn", "Blogi branżowe")
-- detailedDescription: szczegółowy opis narracyjny persony (min. 100 słów)
-- googleAds: tablica obiektów, każdy z polami: "headline1", "headline2", "headline3" (opcjonalny), "description1", "description2" (opcjonalny) (wygeneruj 2-3 reklamy)
-- socialMediaAdText: jeden tekst reklamy na media społecznościowe (np. Facebook, Instagram)
-- imagePrompts: obiekt zawierający:
-  - storyboard: tablica DOKŁADNIE TRZECH (3) stringów, każdy będący szczegółowym promptem dla AI do wygenerowania obrazu do storyboardu. Prompty powinny być opisowe i wizualne.
-  - socialMediaAd: jeden string, będący szczegółowym promptem dla AI do wygenerowania kwadratowego obrazu do reklamy w mediach społecznościowych.
-
-Przykład struktury JSON dla jednej persony (użyj tej struktury dla każdej generowanej persony):
-{
-  "id": "persona-ewa-manager",
-  "name": "Ewa Managerka",
-  "age": 38,
-  "occupation": "Marketing Manager w średniej firmie B2B",
-  "demographics": "Mieszka w dużym mieście, zarobki powyżej średniej krajowej, wykształcenie wyższe, mężatka, jedno dziecko.",
-  "goals": ["Zwiększenie ROI z kampanii marketingowych", "Automatyzacja powtarzalnych zadań", "Rozwój kompetencji zespołu"],
-  "challenges": ["Ograniczony budżet marketingowy", "Szybko zmieniające się trendy", "Trudność w mierzeniu efektywności niektórych działań"],
-  "motivations": ["Osiąganie wyników", "Nowe technologie", "Uznanie w branży"],
-  "communicationChannels": ["LinkedIn", "Newslettery branżowe", "Konferencje marketingowe"],
-  "detailedDescription": "Ewa jest ambitną managerką marketingu... (dłuższy opis)",
-  "googleAds": [
-    { "headline1": "Zwiększ ROI z Reklam", "headline2": "Narzędzia dla Managerów", "headline3": "Testuj za Darmo!", "description1": "Odkryj platformę, która pomoże Ci zoptymalizować budżet i osiągnąć lepsze wyniki. Zacznij już dziś!", "description2": "Nasze rozwiązania wspierają managerów takich jak Ty."}
-  ],
-  "socialMediaAdText": "Jesteś Marketing Managerem i szukasz sposobów na przełamanie rutyny? 🚀 Odkryj narzędzia, które pomogą Ci osiągnąć więcej! #marketing #B2Bmarketing #automation",
-  "imagePrompts": {
-    "storyboard": [
-      "Ewa Managerka siedzi przy biurku w nowoczesnym biurze, analizując wykresy na monitorze komputera, wygląda na skupioną.",
-      "Ewa prowadzi prezentację dla swojego zespołu, wskazując na ekran z danymi, wszyscy są zaangażowani.",
-      "Ewa uśmiecha się, patrząc na tablet, na którym widać pozytywne wyniki kampanii, w tle panorama miasta."
-    ],
-    "socialMediaAd": "Dynamiczna, kwadratowa grafika z ikonami symbolizującymi wzrost i efektywność, nowoczesna typografia z hasłem 'Marketing na Wyższym Poziomie', stonowana kolorystyka z akcentami turkusu."
-  }
-}
-
-Pamiętaj, aby dostarczyć odpowiedź wyłącznie jako poprawny obiekt JSON lub tablicę takich obiektów, bez dodatkowego tekstu przed lub po JSONie. Upewnij się, że prompty do obrazów są kreatywne i szczegółowe.
-Generuj od 1 do 2 person, chyba że informacje wejściowe sugerują większą różnorodność.
+Zwróć odpowiedź WYŁĄCZNIE w formacie JSON, korzystając ze zdefiniowanego schematu.
 `;
+  
+  const personaSchema = {
+    type: Type.OBJECT,
+    properties: {
+        id: { type: Type.STRING, description: "Unikalny identyfikator tekstowy (np. 'persona-123')." },
+        name: { type: Type.STRING, description: "Imię persony (np. 'Anna Innowatorka')." },
+        age: { type: Type.INTEGER, description: "Wiek persony." },
+        occupation: { type: Type.STRING, description: "Zawód/stanowisko." },
+        demographics: { type: Type.STRING, description: "Opis demograficzny (lokalizacja, dochody, edukacja, rodzina itp.)." },
+        goals: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Tablica z celami persony (min. 2)." },
+        challenges: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Tablica z wyzwaniami/problemami persony (min. 2)." },
+        motivations: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Tablica z motywacjami persony (min. 2)." },
+        communicationChannels: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Tablica z preferowanymi kanałami komunikacji." },
+        detailedDescription: { type: Type.STRING, description: "Szczegółowy opis narracyjny persony (min. 100 słów)." },
+        googleAds: { 
+            type: Type.ARRAY, 
+            description: "Tablica 2-3 przykładowych reklam Google Ads.",
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    headline1: { type: Type.STRING },
+                    headline2: { type: Type.STRING },
+                    headline3: { type: Type.STRING, description: "Opcjonalny nagłówek." },
+                    description1: { type: Type.STRING },
+                    description2: { type: Type.STRING, description: "Opcjonalny opis." },
+                },
+                required: ["headline1", "headline2", "description1"]
+            }
+        },
+        socialMediaAdText: { type: Type.STRING, description: "Jeden tekst reklamy na media społecznościowe." },
+        imagePrompts: {
+            type: Type.OBJECT,
+            properties: {
+                storyboard: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Tablica DOKŁADNIE TRZECH (3) szczegółowych promptów do storyboardu." },
+                socialMediaAd: { type: Type.STRING, description: "Jeden szczegółowy prompt do kwadratowego obrazu reklamy w mediach społecznościowych." }
+            },
+            required: ["storyboard", "socialMediaAd"]
+        }
+    },
+    required: ["id", "name", "age", "occupation", "demographics", "goals", "challenges", "motivations", "communicationChannels", "detailedDescription", "googleAds", "socialMediaAdText", "imagePrompts"]
+  };
 
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
@@ -156,6 +154,10 @@ Generuj od 1 do 2 person, chyba że informacje wejściowe sugerują większą r�
       contents: prompt,
       config: {
         responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: personaSchema
+        }
       }
     });
     
@@ -167,7 +169,7 @@ Generuj od 1 do 2 person, chyba że informacje wejściowe sugerują większą r�
 
   } catch (error) {
     console.error("Błąd wywołania Gemini API (generateInitialPersonaData):", error);
-    if (error instanceof Error && error.message.includes("API_KEY_INVALID")) {
+    if (error instanceof Error && (error.message.includes("API_KEY_INVALID") || error.message.includes("API key not valid"))) {
         throw new Error("Klucz API Gemini jest nieprawidłowy. Sprawdź konfigurację.");
     }
     throw error;
@@ -178,41 +180,41 @@ Generuj od 1 do 2 person, chyba że informacje wejściowe sugerują większą r�
 export const generatePersonaImages = async (
   imagePrompts: PersonaScaffold['imagePrompts']
 ): Promise<{ storyboardImages: string[]; socialMediaAdImage: string }> => {
-  if (!process.env.API_KEY || process.env.API_KEY === "YOUR_API_KEY_PLACEHOLDER") {
+  if (!process.env.API_KEY) {
     throw new Error("Klucz API Gemini (API_KEY) nie jest ustawiony w zmiennych środowiskowych.");
   }
   
-  const generateSingleImage = async (prompt: string): Promise<string> => {
+  const generateSingleImage = async (prompt: string, aspectRatio: '1:1' | '16:9' = '1:1'): Promise<string> => {
     try {
-      // Use the SDK's GenerateImagesResponse type
       const response: GenerateImagesResponse = await ai.models.generateImages({
         model: GEMINI_IMAGE_MODEL,
-        prompt: prompt,
-        config: { numberOfImages: 1, outputMimeType: 'image/jpeg' }
+        prompt: `Photo-realistic, detailed image: ${prompt}`,
+        config: { 
+          numberOfImages: 1, 
+          outputMimeType: 'image/jpeg',
+          aspectRatio: aspectRatio
+        }
       });
 
-      // Access imageBytes using the correct path from the SDK's type and perform null checks
       if (response.generatedImages && 
           response.generatedImages.length > 0 && 
-          response.generatedImages[0] &&
-          response.generatedImages[0].image && 
-          response.generatedImages[0].image.imageBytes) {
+          response.generatedImages[0]?.image?.imageBytes) {
         const base64ImageBytes = response.generatedImages[0].image.imageBytes;
-        // The outputMimeType was 'image/jpeg', so using image/jpeg here is consistent.
-        // const mimeType = response.generatedImages[0].image.mimeType; // e.g. "image/jpeg" 
         return `data:image/jpeg;base64,${base64ImageBytes}`;
       }
       console.error("Nie udało się wygenerować obrazu: niekompletna odpowiedź API.", response);
-      throw new Error("Nie udało się wygenerować obrazu: brak danych obrazu w odpowiedzi lub niekompletna struktura.");
+      throw new Error("Nie udało się wygenerować obrazu: brak danych obrazu w odpowiedzi.");
     } catch (error) {
       console.error(`Błąd generowania obrazu dla promptu "${prompt}":`, error);
-      // Return a placeholder or re-throw. For now, returning a placeholder.
-      return "https://picsum.photos/500/500?grayscale&blur=2"; // Placeholder image indicating an error
+      // Zwróć obraz zastępczy w przypadku błędu
+      const placeholderSize = aspectRatio === '1:1' ? '500x500' : '800x450';
+      return `https://via.placeholder.com/${placeholderSize}.png?text=Błąd+obrazu`;
     }
   };
 
-  const storyboardImagesPromises = imagePrompts.storyboard.map(prompt => generateSingleImage(prompt));
-  const socialMediaAdImagePromise = generateSingleImage(imagePrompts.socialMediaAd);
+  // Storyboard obrazy mogą mieć inny aspect ratio
+  const storyboardImagesPromises = imagePrompts.storyboard.map(prompt => generateSingleImage(prompt, '16:9'));
+  const socialMediaAdImagePromise = generateSingleImage(imagePrompts.socialMediaAd, '1:1');
 
   const storyboardImages = await Promise.all(storyboardImagesPromises);
   const socialMediaAdImage = await socialMediaAdImagePromise;
